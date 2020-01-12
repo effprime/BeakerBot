@@ -9,7 +9,7 @@ python:
 
 branches:
   only:
-  - gonzobot
+  - beakerbot
   # Allow tagged releases in the format v1.0
   - /^v\d+\.\d+.*$/
 
