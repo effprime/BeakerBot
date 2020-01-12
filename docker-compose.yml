@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+
+  beakerbot:
+    build: .
+    image: ${IMAGE_NAME:-effprime/beakerbot}
+    container_name: ${CONTAINER_NAME:-beakerbot}
+    restart: always
+    volumes:
+      - ${DB_DIR:-./db}:/db

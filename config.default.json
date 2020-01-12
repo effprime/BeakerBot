@@ -111,7 +111,7 @@
         "brewerydb": "",
         "alphavantage": ""
     },
-    "database": "sqlite:///cloudbot.db",
+    "database": "sqlite:///db/cloudbot.db",
     "plugin_loading": {
         "use_whitelist": false,
         "blacklist": [
