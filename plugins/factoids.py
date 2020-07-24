@@ -2,28 +2,26 @@ import re
 import string
 from collections import defaultdict
 
-from sqlalchemy import Column, PrimaryKeyConstraint, String, Table, and_
+from sqlalchemy import Table, Column, String, PrimaryKeyConstraint
 
 from cloudbot import hook
-from cloudbot.util import colors, database, web
-from cloudbot.util.formatting import gen_markdown_table, get_text_list
-from cloudbot.util.web import NoPasteException
+from cloudbot.util import database, colors, web
+from cloudbot.util.formatting import gen_markdown_table
 
 # below is the default factoid in every channel you can modify it however you like
 default_dict = {"commands": "https://snoonet.org/gonzobot"}
-factoid_cache = defaultdict(default_dict.copy)
 
 re_lineends = re.compile(r'[\r\n]*')
 
-FACTOID_CHAR = "?"  # TODO: config
+FACTOID_CHAR = "?"
 
 table = Table(
     "factoids",
     database.metadata,
-    Column("word", String),
-    Column("data", String),
-    Column("nick", String),
-    Column("chan", String),
+    Column("word", String(25)),
+    Column("data", String(500)),
+    Column("nick", String(25)),
+    Column("chan", String(65)),
     PrimaryKeyConstraint('word', 'chan')
 )
 
@@ -33,16 +31,14 @@ def load_cache(db):
     """
     :type db: sqlalchemy.orm.Session
     """
-    new_cache = defaultdict(default_dict.copy)
+    global factoid_cache
+    factoid_cache = defaultdict(default_dict.copy)
     for row in db.execute(table.select()):
         # assign variables
         chan = row["chan"]
         word = row["word"]
         data = row["data"]
-        new_cache[chan][word] = data
-
-    factoid_cache.clear()
-    factoid_cache.update(new_cache)
+        factoid_cache[chan][word] = data
 
 
 def add_factoid(db, word, chan, data, nick):
@@ -64,32 +60,24 @@ def add_factoid(db, word, chan, data, nick):
     load_cache(db)
 
 
-def del_factoid(db, chan, word=None):
+def del_factoid(db, chan, word):
     """
     :type db: sqlalchemy.orm.Session
-    :type chan: str
-    :type word: list[str]
+    :type word: str
     """
-    clause = table.c.chan == chan
-
-    if word is not None:
-        clause = and_(clause, table.c.word.in_(word))
-
-    db.execute(table.delete().where(clause))
+    db.execute(table.delete().where(table.c.word == word).where(table.c.chan == chan))
     db.commit()
     load_cache(db)
 
 
 @hook.command("r", "remember", permissions=["op", "chanop"])
-def remember(text, nick, db, chan, notice, event):
-    """<word> [+]<data> - remembers <data> with <word> - add + to <data> to append. If the input starts with <act> the
-    message will be sent as an action. If <user> in in the message it will be replaced by input arguments when command
-    is called."""
+def remember(text, nick, db, chan, notice):
+    """<word> [+]<data> - remembers <data> with <word> - add + to <data> to append. If the input starts with <act> the message will be sent as an action. If <user> in in the message it will be replaced by input arguments when command is called."""
+    global factoid_cache
     try:
         word, data = text.split(None, 1)
     except ValueError:
-        event.notice_doc()
-        return
+        return remember.__doc__
 
     word = word.lower()
     try:
@@ -114,59 +102,19 @@ def remember(text, nick, db, chan, notice, event):
     add_factoid(db, word, chan, data, nick)
 
 
-def paste_facts(facts, raise_on_no_paste=False):
-    headers = ("Command", "Output")
-    data = [(FACTOID_CHAR + fact[0], fact[1]) for fact in sorted(facts.items())]
-    tbl = gen_markdown_table(headers, data).encode('UTF-8')
-    return web.paste(tbl, 'md', 'hastebin', raise_on_no_paste=raise_on_no_paste)
-
-
-def remove_fact(chan, names, db, notice):
-    found = {}
-    missing = []
-    for name in names:
-        data = factoid_cache[chan].get(name.lower())
-        if data:
-            found[name] = data
-        else:
-            missing.append(name)
-
-    if missing:
-        notice("Unknown factoids: {}".format(
-            get_text_list([repr(s) for s in missing], 'and')
-        ))
-
-    if found:
-        try:
-            notice("Removed Data: {}".format(paste_facts(found, True)))
-        except NoPasteException:
-            notice("Unable to paste removed data, not removing facts")
-            return
-
-        del_factoid(db, chan, list(found.keys()))
-
-
 @hook.command("f", "forget", permissions=["op", "chanop"])
 def forget(text, chan, db, notice):
-    """<word>... - Remove factoids with the specified names
+    """<word> - forgets previously remembered <word>"""
+    global factoid_cache
+    data = factoid_cache[chan][text.lower()]
 
-    :type text: str
-    :type chan: str
-    :type db: sqlalchemy.orm.Session
-    :type notice: function
-    """
-    remove_fact(chan, text.split(), db, notice)
-
-
-@hook.command('forgetall', 'clearfacts', autohelp=False, permissions=['op', 'chanop'])
-def forget_all(chan, db):
-    """- Remove all factoids in the current channel
-
-    :type chan: str
-    :type db: sqlalchemy.orm.Session
-    """
-    del_factoid(db, chan)
-    return "Facts cleared."
+    if data:
+        del_factoid(db, chan, text)
+        notice('"{}" has been forgotten.'.format(data.replace('`', "'")))
+        return
+    else:
+        notice("I don't know about that.")
+        return
 
 
 @hook.command()
@@ -183,9 +131,14 @@ def info(text, chan, notice):
 
 factoid_re = re.compile(r'^{} ?(.+)'.format(re.escape(FACTOID_CHAR)), re.I)
 
+def find_user_in_history(conn, chan, nick):
+    for name, _, _ in reversed(conn.history[chan.casefold()]):
+        if nick.casefold() == name.casefold():
+            return nick
+    return "User"
 
 @hook.regex(factoid_re)
-def factoid(content, match, chan, message, action):
+def factoid(content, match, chan, nick, message, action, conn):
     """<word> - shows what data is associated with <word>"""
     arg1 = ""
     if len(content.split()) >= 2:
@@ -200,35 +153,37 @@ def factoid(content, match, chan, message, action):
 
         # factoid post-processors
         result = colors.parse(result)
-        if arg1:
-            result = result.replace("<user>", arg1)
+
         if result.startswith("<act>"):
             result = result[5:].strip()
             action(result)
+        elif arg1:
+            arg1 = find_user_in_history(conn, chan, arg1)
+            message(f"({arg1}): {result}")
         else:
             message(result)
 
-
-@hook.command("listfacts", autohelp=False)
+@hook.command("listfacts", autohelp=False, permissions=["op", "chanop"])
 def listfactoids(notice, chan):
     """- lists all available factoids"""
     reply_text = []
     reply_text_length = 0
     for word in sorted(factoid_cache[chan].keys()):
-        text = FACTOID_CHAR + word
-        added_length = len(text) + 2
+        added_length = len(word) + 2
         if reply_text_length + added_length > 400:
             notice(", ".join(reply_text))
             reply_text = []
             reply_text_length = 0
-
-        reply_text.append(text)
-        reply_text_length += added_length
-
+        else:
+            reply_text.append(word)
+            reply_text_length += added_length
     notice(", ".join(reply_text))
 
 
-@hook.command("listdetailedfacts", autohelp=False)
+@hook.command("listdetailedfacts", autohelp=False, permissions=["op", "chanop"])
 def listdetailedfactoids(chan):
     """- lists all available factoids with their respective data"""
-    return paste_facts(factoid_cache[chan])
+    headers = ("Command", "Output")
+    data = [(FACTOID_CHAR + fact[0], fact[1]) for fact in sorted(factoid_cache[chan].items())]
+    table = gen_markdown_table(headers, data).encode('UTF-8')
+    return web.paste(table, "md", "hastebin")
