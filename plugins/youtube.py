@@ -5,7 +5,6 @@ import isodate
 import requests
 
 from cloudbot import hook
-from cloudbot.bot import bot
 from cloudbot.util import timeformat
 from cloudbot.util.formatting import pluralize_auto
 
@@ -19,28 +18,17 @@ video_url = "http://youtu.be/%s"
 err_no_api = "The YouTube API is off in the Google Developers Console."
 
 
-class APIError(Exception):
-    def __init__(self, message, response=None):
-        super().__init__(message)
-        self.message = message
-        self.response = response
-
-
 def get_video_description(video_id):
-    dev_key = bot.config.get_api_key("google_dev_key")
     request = requests.get(api_url.format(video_id, dev_key))
     json = request.json()
 
     if json.get('error'):
         if json['error']['code'] == 403:
-            raise APIError(err_no_api, json)
-
-        raise APIError("Unknown error", json)
+            return err_no_api
+        else:
+            return
 
     data = json['items']
-    if not data:
-        return None
-
     snippet = data[0]['snippet']
     statistics = data[0]['statistics']
     content_details = data[0]['contentDetails']
@@ -82,31 +70,10 @@ def get_video_description(video_id):
     return out
 
 
-def get_video_id(reply, text):
-    dev_key = bot.config.get_api_key('google_dev_key')
-    if not dev_key:
-        return None, "This command requires a Google Developers Console API key."
-
-    try:
-        request = requests.get(search_api_url, params={'q': text, 'key': dev_key, 'type': 'video'})
-        request.raise_for_status()
-    except Exception:
-        reply("Error performing search.")
-        raise
-
-    json = request.json()
-
-    if json.get('error'):
-        if json['error']['code'] == 403:
-            return None, err_no_api
-
-        return None, "Error performing search."
-
-    if not json.get('items'):
-        return None, "No results found."
-
-    video_id = json['items'][0]['id']['videoId']
-    return video_id, None
+@hook.on_start()
+def load_key(bot):
+    global dev_key
+    dev_key = bot.config.get("api_keys", {}).get("google_dev_key", None)
 
 
 @hook.regex(youtube_re)
@@ -114,28 +81,61 @@ def youtube_url(match):
     return get_video_description(match.group(1))
 
 
-@hook.command("youtube", "you", "yt", "y")
+@hook.command("youtube", "you", "yt", "y", permissions=["op", "chanop"])
 def youtube(text, reply):
     """<query> - Returns the first YouTube search result for <query>."""
-    video_id, err = get_video_id(reply, text)
-    if err:
-        return err
+    if not dev_key:
+        return "This command requires a Google Developers Console API key."
 
     try:
-        return get_video_description(video_id) + " - " + video_url % video_id
-    except APIError as e:
-        reply(e.message)
+        request = requests.get(search_api_url, params={"q": text, "key": dev_key, "type": "video"})
+        request.raise_for_status()
+    except Exception:
+        reply("Error performing search.")
         raise
+
+    json = requests.get(search_api_url, params={"q": text, "key": dev_key, "type": "video"}).json()
+
+    if json.get('error'):
+        if json['error']['code'] == 403:
+            return err_no_api
+        else:
+            return 'Error performing search.'
+
+    if json['pageInfo']['totalResults'] == 0:
+        return 'No results found.'
+
+    video_id = json['items'][0]['id']['videoId']
+
+    return get_video_description(video_id) + " - " + video_url % video_id
 
 
 @hook.command("youtime", "ytime")
 def youtime(text, reply):
     """<query> - Gets the total run time of the first YouTube search result for <query>."""
-    video_id, err = get_video_id(reply, text)
-    if err:
-        return err
+    if not dev_key:
+        return "This command requires a Google Developers Console API key."
 
-    dev_key = bot.config.get_api_key('google_dev_key')
+    try:
+        request = requests.get(search_api_url, params={"q": text, "key": dev_key, "type": "video"})
+        request.raise_for_status()
+    except Exception:
+        reply("Error performing search.")
+        raise
+
+    json = requests.get(search_api_url, params={"q": text, "key": dev_key, "type": "video"}).json()
+
+    if json.get('error'):
+        if json['error']['code'] == 403:
+            return err_no_api
+        else:
+            return 'Error performing search.'
+
+    if json['pageInfo']['totalResults'] == 0:
+        return 'No results found.'
+
+    video_id = json['items'][0]['id']['videoId']
+
     request = requests.get(api_url.format(video_id, dev_key))
     request.raise_for_status()
 
@@ -170,7 +170,6 @@ ytpl_re = re.compile(r'(.*:)//(www.youtube.com/playlist|youtube.com/playlist)(:[
 @hook.regex(ytpl_re)
 def ytplaylist_url(match, reply):
     location = match.group(4).split("=")[-1]
-    dev_key = bot.config.get_api_key("google_dev_key")
     try:
         request = requests.get(playlist_api_url, params={"id": location, "key": dev_key})
         request.raise_for_status()
@@ -183,13 +182,10 @@ def ytplaylist_url(match, reply):
     if json.get('error'):
         if json['error']['code'] == 403:
             return err_no_api
-
-        return 'Error looking up playlist.'
+        else:
+            return 'Error looking up playlist.'
 
     data = json['items']
-    if not data:
-        return "No results found."
-
     snippet = data[0]['snippet']
     content_details = data[0]['contentDetails']
 
