@@ -13,7 +13,7 @@ CHANNEL = ""
 
 def serialize(event, message):
     data = {}
-    data["time"] = datetime.datetime.now()
+    data["time"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
     data["author_nick"] = event.nick
     data["channel_name"] = event.chan
     data["message"] = message
@@ -25,10 +25,19 @@ def deserialize(body):
     except Exception:
         return None
 
+    time = deserialized.get("time")
+    if not time:
+        return
+        
+    time = datetime.datetime.strptime(time, "%Y-%m-%d %H:%M:%S.%f")
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    if (now - time).total_seconds() > 600:
+        return
+
     author_name = deserialized.get("author_name")
     message = deserialized.get("message")
     if author_name and message:
-        return f"[Discord] {author_name}: {message}"
+        return f"[D] {author_name}: {message}"
 
 @hook.regex(re.compile(r'[\s\S]+'))
 async def irc_message_relay(event, match):
@@ -36,6 +45,8 @@ async def irc_message_relay(event, match):
         return
 
     message = match.group()
+    if message.startswith(event.conn.config.get('command_prefix')):
+        return
 
     mq_connection = pika.BlockingConnection(
             pika.URLParameters(MQ_HOST)
@@ -45,6 +56,7 @@ async def irc_message_relay(event, match):
     mq_channel.basic_publish(
         exchange="", routing_key=SEND_QUEUE, body=serialize(event, message)
     )
+    mq_connection.close()
 
 @asyncio.coroutine
 @hook.periodic(1)
@@ -57,11 +69,12 @@ async def discord_message_receiver(bot):
     mq_channel.queue_declare(queue=RECV_QUEUE, durable=True)
     if irc_conn:
         try:
-            method, header, body = mq_channel.basic_get(queue=RECV_QUEUE)
+            method, _, body = mq_channel.basic_get(queue=RECV_QUEUE)
             if method:
                 mq_channel.basic_ack(method.delivery_tag)
                 message = deserialize(body)
                 if message:
                     irc_conn.message(CHANNEL, message)
-        except Exception:
-            pass
+        except Exception as e:
+            print(e)
+    mq_connection.close()
