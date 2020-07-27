@@ -25,14 +25,10 @@ def deserialize(body):
     except Exception:
         return None
 
-    time = deserialized.get("time")
     author_name = deserialized.get("author_name")
     message = deserialized.get("message")
-    if author_name and message and time:
-        time = datetime.datetime.strptime(time, "%Y-%m-%d %H:%M:%S.%f")
-        time = time.strftime('%H:%M:%S')
-
-        return f"[DISCORD@{time}] {author_name}: {message}"
+    if author_name and message:
+        return f"[Discord] {author_name}: {message}"
 
 @hook.regex(re.compile(r'[\s\S]+'))
 async def irc_message_relay(event, match):
