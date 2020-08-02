@@ -24,7 +24,19 @@
                 "#cloudbot",
                 "#cloudbot2"
             ],
-            "log_channel": "#MyAdminChannel",
+            "chanprotect": {
+                "#channel": {
+                    "caplength": 30,
+                    "capratio": 0.75,
+                    "lines": 5,
+                    "opchan": "#opchannel",
+                    "opnotices": false,
+                    "repeat": 3,
+                    "rules": "",
+                    "secs": 3
+                }
+            },
+            "log_channel": "",
             "disabled_commands": [],
             "acls": {},
             "sasl": {
