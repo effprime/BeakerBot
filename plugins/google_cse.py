@@ -20,7 +20,7 @@ from cloudbot.util import formatting, filesize
 API_CS = 'https://www.googleapis.com/customsearch/v1'
 
 
-@hook.command('gse')
+@hook.command('g')
 def gse(text):
     """<query> - Returns first Google search result for <query>."""
     dev_key = bot.config.get_api_key("google_dev_key")
@@ -48,7 +48,7 @@ def gse(text):
     return u'{} -- \x02{}\x02: "{}"'.format(result['link'], title, content)
 
 
-@hook.command('gseis', 'image')
+@hook.command('gis', 'image')
 def gse_gis(text):
     """<query> - Returns first Google Images result for <query>."""
     dev_key = bot.config.get_api_key("google_dev_key")
