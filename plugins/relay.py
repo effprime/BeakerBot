@@ -5,11 +5,14 @@ import datetime
 import json
 import re
 
-MQ_HOST = ""
-SEND_QUEUE = ""
-RECV_QUEUE = ""
-IRC_CONNECTION = ""
-CHANNEL = ""
+MQ_HOST = "rabbitmq.home.arpa"
+MQ_USER = "user"
+MQ_PASS = "password"
+MQ_SSL = False
+SEND_QUEUE = "IRCToDiscord"
+RECV_QUEUE = "DiscordToIRC"
+IRC_CONNECTION = "freenode"
+CHANNEL = "#effprime-bot"
 
 def serialize(event, message):
     data = {}
@@ -17,7 +20,7 @@ def serialize(event, message):
     data["author_nick"] = event.nick
     data["channel_name"] = event.chan
     data["message"] = message
-    return json.dumps(data, default=str)
+    return json.dumps(data)
 
 def deserialize(body):
     try:
@@ -48,11 +51,15 @@ async def irc_message_relay(event, match):
     if message.startswith(event.conn.config.get('command_prefix')):
         return
 
-    mq_connection = pika.BlockingConnection(
-            pika.URLParameters(MQ_HOST)
-        )
+    parameters = pika.ConnectionParameters(
+        MQ_HOST,
+        5671 if MQ_SSL else 5672,
+        "/",
+        pika.PlainCredentials(MQ_USER, MQ_PASS)
+    )
+    mq_connection = pika.BlockingConnection(parameters)
     mq_channel = mq_connection.channel()
-    mq_channel.queue_declare(queue=SEND_QUEUE, durable=True)
+    mq_channel.queue_declare(queue=RECV_QUEUE, durable=True)
     mq_channel.basic_publish(
         exchange="", routing_key=SEND_QUEUE, body=serialize(event, message)
     )
@@ -62,9 +69,13 @@ async def irc_message_relay(event, match):
 @hook.periodic(1)
 async def discord_message_receiver(bot):
     irc_conn = bot.connections.get(IRC_CONNECTION)
-    mq_connection = pika.BlockingConnection(
-            pika.URLParameters(MQ_HOST)
-        )
+    parameters = pika.ConnectionParameters(
+        MQ_HOST,
+        5671 if MQ_SSL else 5672,
+        "/",
+        pika.PlainCredentials(MQ_USER, MQ_PASS)
+    )
+    mq_connection = pika.BlockingConnection(parameters)
     mq_channel = mq_connection.channel()
     mq_channel.queue_declare(queue=RECV_QUEUE, durable=True)
     if irc_conn:
