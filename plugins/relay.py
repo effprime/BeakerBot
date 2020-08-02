@@ -5,14 +5,14 @@ import datetime
 import json
 import re
 
-MQ_HOST = "rabbitmq.home.arpa"
+MQ_HOST = ""
 MQ_USER = "user"
 MQ_PASS = "password"
 MQ_SSL = False
 SEND_QUEUE = "IRCToDiscord"
 RECV_QUEUE = "DiscordToIRC"
-IRC_CONNECTION = "freenode"
-CHANNEL = "#effprime-bot"
+IRC_CONNECTION = ""
+CHANNEL = ""
 
 def serialize(event, message):
     data = {}
