@@ -13,8 +13,8 @@ chars = '~`!@#$%^&*()_+=-|}{[]\\\';:"/.,<>?``¡™£¢∞§¶•ªº–≠«‘�
 
 @asyncio.coroutine
 @hook.irc_raw("PRIVMSG")
-def parse_privmsg(conn, nick, user, host, chan, irc_raw, has_permission, admin_log):
-    if not has_permission('floodexempt', notice=False):
+def parse_privmsg(conn, nick, user, host, chan, irc_raw, admin_log, event):
+    if not "o" in get_permission(event):
         message = ' '.join(''.join(irc_raw.split(':', 2)).split()[3:])
         message = message.translate(message.maketrans('','', chars))
         if len(message) > 0:
@@ -27,6 +27,21 @@ def parse_privmsg(conn, nick, user, host, chan, irc_raw, has_permission, admin_l
                 check_flood(conn, chan, nick, user, host, config, admin_log)
                 check_repeat(conn, chan, nick, user, host, config, admin_log)
                 check_caps(conn, chan, nick, user, host, message, config, admin_log)
+                
+def get_permission(event):
+    try:
+        users = get_users(event.conn)
+        user = users.get(event.nick)
+        if user:
+            member = user.channels.get(CHANNEL) if user else None
+            if member:
+                modes = []
+                for entry in member.status:
+                    modes.append(entry.mode)
+                return modes
+    except Exception:
+        pass
+    return []
 
 @asyncio.coroutine
 @hook.irc_raw("JOIN")

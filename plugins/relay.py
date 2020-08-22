@@ -19,14 +19,20 @@ SEND_QUEUE = "IRCToDiscord"
 RECV_QUEUE = "DiscordToIRC"
 IRC_CONNECTION = "freenode"
 CHANNEL = "#effprime-bot"
-QUEUE_CHECK_SECONDS = 2
+QUEUE_CHECK_SECONDS = 3
+QUEUE_SEND_SECONDS = 3
 STALE_PERIOD_SECONDS = 600
 COMMANDS_ALLOWED = True
+RESPONSE_LIMIT = 3
+SEND_LIMIT = 3
 
 IRC_BOLD = ""
 IRC_ITALICS = ""
 
 log = logging.getLogger("relay_plugin")
+
+# limits connections we have to make per hook
+send_buffer = []
 
 def get_permission(event):
     try:
@@ -41,7 +47,7 @@ def get_permission(event):
                 return modes
     except Exception as e:
         log.warning(f"Unable to get permissiaons for {event.nick}: {e}")
-        return []
+    return []
 
 def serialize(type_, event):
     data = Munch()
@@ -84,8 +90,9 @@ def serialize(type_, event):
 def deserialize(body):    
     try:
         deserialized = Munch.fromJSON(body)
-    except Exception:
-        log.warning(f"Unable to Munch-deserialize incoming data")
+    except Exception as e:
+        log.warning(f"Unable to Munch-deserialize incoming data: {e}")
+        log.warning(f"Full body: {body}")
         return
 
     time = deserialized.event.time
@@ -122,7 +129,9 @@ def get_mq_connection():
         e = e or "No route to host" # dumb correction to a blank error
         log.warning(f"Unable to connect to RabbitMQ: {e}")
 
-def publish(body):
+def publish(bodies):
+    mq_connection = None
+
     try:
         mq_connection = get_mq_connection()
         if not mq_connection:
@@ -130,14 +139,21 @@ def publish(body):
             return
         mq_channel = mq_connection.channel()
         mq_channel.queue_declare(queue=RECV_QUEUE, durable=True)
-        mq_channel.basic_publish(
-            exchange="", routing_key=SEND_QUEUE, body=body
-        )
-        mq_connection.close()
+        for body in bodies:
+            mq_channel.basic_publish(
+                exchange="", routing_key=SEND_QUEUE, body=body
+            )
+
     except Exception as e:
         log.warning(f"Unable to publish body to queue {SEND_QUEUE}: {e}")
 
+    if mq_connection:
+        mq_connection.close()
+
 def consume():
+    mq_connection = None
+    bodies = []
+
     try:
         mq_connection = get_mq_connection()
         if not mq_connection:
@@ -145,13 +161,28 @@ def consume():
             return
         mq_channel = mq_connection.channel()
         mq_channel.queue_declare(queue=RECV_QUEUE, durable=True)
-        method, _, body = mq_channel.basic_get(queue=RECV_QUEUE)
-        if method:
-            mq_channel.basic_ack(method.delivery_tag)
-        mq_connection.close()
-        return body
+        
+        checks = 0
+        while checks < RESPONSE_LIMIT:
+            body = get_ack(mq_channel)
+            checks += 1
+            if not body:
+                return bodies
+            bodies.append(body)
+
     except Exception as e:
         log.warning(f"Unable to consume from queue {RECV_QUEUE}: {e}")
+
+    if mq_connection:
+        mq_connection.close()
+
+    return bodies
+
+def get_ack(channel):
+    method, _, body = channel.basic_get(queue=RECV_QUEUE)
+    if method:
+        channel.basic_ack(method.delivery_tag)
+        return body
 
 def format_message(data):
     if data.event.type == "message":
@@ -174,15 +205,24 @@ def _format_chat_message(data):
 def irc_message_relay(event, match):
     if event.chan != CHANNEL:
         return
+    send_buffer.append(serialize("message", event))
 
-    publish(serialize("message", event))
+@hook.periodic(QUEUE_SEND_SECONDS)
+def irc_publish(bot):
+    global send_buffer
+    bodies = [
+        body for idx, body in enumerate(send_buffer) if idx+1 <= SEND_LIMIT
+    ]
+    if bodies:
+        publish(bodies)
+        send_buffer = send_buffer[len(bodies):]
 
 @hook.event([
     EventType.join, 
     EventType.part, 
     EventType.kick, 
-    EventType.action, 
-    EventType.other
+    EventType.other,
+    EventType.notice
 ])
 def irc_event_relay(event):
     if event.chan != CHANNEL:
@@ -193,9 +233,14 @@ def irc_event_relay(event):
         EventType.part: "part",
         EventType.kick: "kick",
         # EventType.action: "action", # on TODO: no clue how to deal with this right now
-        EventType.other: "other"
+        EventType.other: "other",
+        EventType.notice: "notice"
     }
-    publish(serialize(lookup[event.type], event))
+    send_buffer.append(serialize(lookup[event.type], event))
+
+@hook.irc_raw("QUIT")
+def irc_quit_event_relay(event):
+    send_buffer.append(serialize("quit", event))
 
 @hook.command("discord", permissions=["op", "chanop"])
 def discord_command(text, nick, db, conn, mask, event):
@@ -213,12 +258,12 @@ def discord_command(text, nick, db, conn, mask, event):
             target = args[1]
             event.discord_command = command
             event.content = target
-            publish(serialize("command", event))
+            send_buffer.append(serialize("command", event))
 
 @hook.periodic(QUEUE_CHECK_SECONDS)
 def discord_receiver(bot):
-    response = consume()
-    if response:
+    responses = consume()
+    for response in responses:
         handle_event(bot, response)
 
 def handle_event(bot, response):
@@ -228,7 +273,6 @@ def handle_event(bot, response):
         return
 
     event_type = data.event.type
-
     # handle message event
     if event_type in ["message"]:
         message = format_message(data)
@@ -243,7 +287,6 @@ def handle_event(bot, response):
     # handle command event
     elif event_type == "command":
         process_command(bot, data)
-
     else:
         log.warning(f"Unable to handle event: {response}")
 
@@ -252,13 +295,13 @@ def process_command(bot, data):
         log.warning(f"Blocking incoming {data.event.command} request due to disabled config")
         return
 
-    if not getattr(data.permissions, data.event.command) == True:
+    if not getattr(data.author.permissions, data.event.command) == True or not getattr(data.author.permissions, "admin"):
         log.warning(f"Blocking incoming {data.event.command} request due to permissions")
         return
 
     bot.connections.get(IRC_CONNECTION).message(
         CHANNEL,
-        f"Executing IRC `{data.event.command}` command from *{data.author.username}* on target *{data.event.content}*"
+        f"Executing IRC {data.event.command} command from {data.author.username} on target {data.event.content}"
     )
 
     action = ""
@@ -270,7 +313,7 @@ def process_command(bot, data):
         if data.event.content.count(".") == 3:
             # very likely to be an IP
             # cant wait to see the edge case
-            action = f"MODE {CHANNEL} {mode}b *!*@{data.event.content}"
+            action = f"MODE {CHANNEL} {mode}b *!*@*{data.event.content}"
         else:
             action = f"MODE {CHANNEL} {mode}b {data.event.content}!*@*"
 
