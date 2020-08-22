@@ -10,8 +10,10 @@ import logging
 from plugins.core.chan_track import get_users
 
 MQ_HOST = "rabbitmq.home.arpa"
+MQ_VHOST = "/"
 MQ_USER = "user"
 MQ_PASS = "password"
+MQ_PORT = 5672
 MQ_SSL = False
 SEND_QUEUE = "IRCToDiscord"
 RECV_QUEUE = "DiscordToIRC"
@@ -111,8 +113,8 @@ def get_mq_connection():
     try:
         parameters = pika.ConnectionParameters(
             MQ_HOST,
-            5671 if MQ_SSL else 5672,
-            "/",
+            MQ_PORT,
+            MQ_VHOST,
             pika.PlainCredentials(MQ_USER, MQ_PASS)
         )
         return pika.BlockingConnection(parameters)
