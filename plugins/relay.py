@@ -135,7 +135,7 @@ def publish(bodies):
     try:
         mq_connection = get_mq_connection()
         if not mq_connection:
-            log.warning(f"Unable to retrieve MQ connection - aborting publish: {body}")
+            log.warning(f"Unable to retrieve MQ connection - aborting publish: {bodies}")
             return
         mq_channel = mq_connection.channel()
         mq_channel.queue_declare(queue=RECV_QUEUE, durable=True)
@@ -158,7 +158,7 @@ def consume():
         mq_connection = get_mq_connection()
         if not mq_connection:
             log.warning(f"Unable to retrieve MQ connection - aborting consume")
-            return
+            return bodies
         mq_channel = mq_connection.channel()
         mq_channel.queue_declare(queue=RECV_QUEUE, durable=True)
         
@@ -167,7 +167,7 @@ def consume():
             body = get_ack(mq_channel)
             checks += 1
             if not body:
-                return bodies
+                break
             bodies.append(body)
 
     except Exception as e:
@@ -295,7 +295,7 @@ def process_command(bot, data):
         log.warning(f"Blocking incoming {data.event.command} request due to disabled config")
         return
 
-    if not getattr(data.author.permissions, data.event.command) == True or not getattr(data.author.permissions, "admin"):
+    if not getattr(data.author.permissions, data.event.command) == True and not getattr(data.author.permissions, "admin"):
         log.warning(f"Blocking incoming {data.event.command} request due to permissions")
         return
 
