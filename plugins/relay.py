@@ -7,6 +7,8 @@ import json
 import re
 import logging
 
+from plugins.core.chan_track import get_users
+
 MQ_HOST = "rabbitmq.home.arpa"
 MQ_USER = "user"
 MQ_PASS = "password"
@@ -17,11 +19,27 @@ IRC_CONNECTION = "freenode"
 CHANNEL = "#effprime-bot"
 QUEUE_CHECK_SECONDS = 2
 STALE_PERIOD_SECONDS = 600
+COMMANDS_ALLOWED = True
 
 IRC_BOLD = ""
 IRC_ITALICS = ""
 
 log = logging.getLogger("relay_plugin")
+
+def get_permission(event):
+    try:
+        users = get_users(event.conn)
+        user = users.get(event.nick)
+        if user:
+            member = user.channels.get(CHANNEL) if user else None
+            if member:
+                modes = []
+                for entry in member.status:
+                    modes.append(entry.mode)
+                return modes
+    except Exception as e:
+        log.warning(f"Unable to get permissiaons for {event.nick}: {e}")
+        return []
 
 def serialize(type_, event):
     data = Munch()
@@ -33,24 +51,29 @@ def serialize(type_, event):
     data.event.content = getattr(event, "content", None) or getattr(event, "content_raw", None)
     data.event.command = getattr(event, "discord_command", None)
     data.event.target = event.target
+    data.event.irc_raw = event.irc_raw
+    data.event.irc_prefix = event.irc_prefix
+    data.event.irc_command = event.irc_command
+    data.event.irc_paramlist = event.irc_paramlist
+    data.event.irc_ctcp_text = event.irc_ctcp_text
 
     # author data
     data.author = Munch()
     data.author.nickname = event.nick
     data.author.username = event.user
     data.author.mask = event.mask
+    data.author.host = event.host
+    data.author.permissions = get_permission(event)
 
     # server data
     data.server = Munch()
-    data.server.host = event.host
+    data.server.name = event.conn.name
+    data.server.nick = event.conn.nick
+    data.server.channels = event.conn.channels
 
     # channel data
     data.channel = Munch()
     data.channel.name = event.chan
-
-    # permissions data
-    data.permissions = Munch()
-    data.permissions.op = event.has_permission("op") or event.has_permission("chanop")
 
     as_json = data.toJSON()
     log.warning(f"Serialized data: {as_json}")
@@ -134,16 +157,16 @@ def format_message(data):
 
 def _get_permissions_label(permissions):
     if permissions.admin:
-        return "@+"
+        return "**"
     elif permissions.ban or permissions.kick:
-        return "@"
+        return "*"
     else:
         return ""
 
 def _format_chat_message(data):
     attachment_urls = ", ".join(data.event.attachments) if data.event.attachments else ""
-    attachment_urls = f"... {attachment_urls}" if attachment_urls else ""
-    return f"{IRC_BOLD}[Discord]{IRC_BOLD} {IRC_ITALICS}{_get_permissions_label(data.permissions)}{data.author.username}{IRC_ITALICS}: {data.event.content} {attachment_urls}"
+    attachment_urls = f" {attachment_urls}" if attachment_urls else ""
+    return f"{IRC_BOLD}[D]{IRC_BOLD} <{_get_permissions_label(data.author.permissions)}{data.author.username}> {data.event.content} {attachment_urls}"
 
 @hook.regex(re.compile(r'[\s\S]+'))
 def irc_message_relay(event, match):
@@ -174,6 +197,9 @@ def irc_event_relay(event):
 
 @hook.command("discord", permissions=["op", "chanop"])
 def discord_command(text, nick, db, conn, mask, event):
+    if not COMMANDS_ALLOWED:
+        return f"{nick}: relay cross-chat commands have been disabled on this bot ({CHANNEL})" 
+
     if event.chan != CHANNEL:
         log.warning(f"Discord command issued outside of channel {CHANNEL}")
         return f"{nick}: that command can only be used from the Discord relay channel ({CHANNEL})"
@@ -220,16 +246,31 @@ def handle_event(bot, response):
         log.warning(f"Unable to handle event: {response}")
 
 def process_command(bot, data):
-    if not getattr(data.permissions, data.event.command) == True:
-        log.warning(f"Blocking incoming {data.event.command} request")
+    if not COMMANDS_ALLOWED:
+        log.warning(f"Blocking incoming {data.event.command} request due to disabled config")
         return
+
+    if not getattr(data.permissions, data.event.command) == True:
+        log.warning(f"Blocking incoming {data.event.command} request due to permissions")
+        return
+
+    bot.connections.get(IRC_CONNECTION).message(
+        CHANNEL,
+        f"Executing IRC `{data.event.command}` command from *{data.author.username}* on target *{data.event.content}*"
+    )
 
     action = ""
     if data.event.command == "kick":
         action = f"KICK {CHANNEL} {data.event.content} :kicked by {data.author.username} from Discord"
 
-    elif data.event.command == "ban":
-        action = f"MODE {CHANNEL} +b {data.event.content}!*@*"
+    elif data.event.command in  ["ban", "unban"]:
+        mode = "+" if data.event.command == "ban" else "-"
+        if data.event.content.count(".") == 3:
+            # very likely to be an IP
+            # cant wait to see the edge case
+            action = f"MODE {CHANNEL} {mode}b *!*@{data.event.content}"
+        else:
+            action = f"MODE {CHANNEL} {mode}b {data.event.content}!*@*"
 
     elif data.event.command == "unban":
         action = f"MODE {CHANNEL} -b {data.event.content}!*@*"
