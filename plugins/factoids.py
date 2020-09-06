@@ -138,7 +138,10 @@ def find_user_in_history(conn, chan, nick):
     return "User"
 
 @hook.regex(factoid_re)
-def factoid(content, match, chan, nick, message, action, conn):
+def factoid(content, match, chan, nick, message, action, conn, event):
+    if not isinstance(conn.memory.get("factoids"), list):
+        conn.memory["factoids"] = []
+
     """<word> - shows what data is associated with <word>"""
     arg1 = ""
     if len(content.split()) >= 2:
@@ -154,14 +157,17 @@ def factoid(content, match, chan, nick, message, action, conn):
         # factoid post-processors
         result = colors.parse(result)
 
+        event.content = result
         if result.startswith("<act>"):
             result = result[5:].strip()
             action(result)
         elif arg1:
             arg1 = find_user_in_history(conn, chan, arg1)
             message(f"({arg1}): {result}")
+            conn.memory.get("factoids", []).append(event)
         else:
             message(result)
+            conn.memory.get("factoids", []).append(event)
 
 @hook.command("listfacts", autohelp=False, permissions=["op", "chanop"])
 def listfactoids(notice, chan):

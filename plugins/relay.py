@@ -19,8 +19,8 @@ SEND_QUEUE = "IRCToDiscord"
 RECV_QUEUE = "DiscordToIRC"
 IRC_CONNECTION = "freenode"
 CHANNEL = "#effprime-bot"
-QUEUE_CHECK_SECONDS = 3
-QUEUE_SEND_SECONDS = 3
+QUEUE_CHECK_SECONDS = 1
+QUEUE_SEND_SECONDS = 1
 STALE_PERIOD_SECONDS = 600
 COMMANDS_ALLOWED = True
 RESPONSE_LIMIT = 3
@@ -213,9 +213,21 @@ def irc_publish(bot):
     bodies = [
         body for idx, body in enumerate(send_buffer) if idx+1 <= SEND_LIMIT
     ]
+    bodies = append_factoids(bot.connections.get(IRC_CONNECTION), bodies)
     if bodies:
         publish(bodies)
         send_buffer = send_buffer[len(bodies):]
+
+def append_factoids(conn, bodies):
+    if conn:
+        MAX_FACTOIDS = 5
+        memory = conn.memory.get("factoids")
+        if memory:
+            limit = MAX_FACTOIDS if MAX_FACTOIDS <= len(memory) else len(memory)
+            for i in range(0, limit):
+                bodies.append(serialize("message", memory[i]))
+            conn.memory["factoids"] = conn.memory["factoids"][limit:]
+    return bodies
 
 @hook.event([
     EventType.join, 
@@ -327,6 +339,3 @@ def process_command(bot, data):
             log.warning(f"Unable to send command to {CHANNEL}: {e}")   
     else:
         log.warning(f"Received unroutable command: {data.event.command}")
-
-# TODO:
-# send more information for mode changes (showing as `other` events)
