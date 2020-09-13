@@ -158,6 +158,7 @@ def factoid(content, match, chan, nick, message, action, conn, event):
         result = colors.parse(result)
 
         event.content = result
+        event.target = None
         if result.startswith("<act>"):
             result = result[5:].strip()
             action(result)

@@ -1,5 +1,5 @@
 from cloudbot import hook
-from cloudbot.event import EventType
+from cloudbot.event import Event, EventType
 import pika
 from munch import Munch
 import datetime
@@ -185,7 +185,7 @@ def get_ack(channel):
         return body
 
 def format_message(data):
-    if data.event.type == "message":
+    if data.event.type in ["message", "factoid"]:
         return _format_chat_message(data)
 
 def _get_permissions_label(permissions):
@@ -225,7 +225,7 @@ def append_factoids(conn, bodies):
         if memory:
             limit = MAX_FACTOIDS if MAX_FACTOIDS <= len(memory) else len(memory)
             for i in range(0, limit):
-                bodies.append(serialize("message", memory[i]))
+                bodies.append(serialize("factoid", memory[i]))
             conn.memory["factoids"] = conn.memory["factoids"][limit:]
     return bodies
 
@@ -273,12 +273,12 @@ def discord_command(text, nick, db, conn, mask, event):
             send_buffer.append(serialize("command", event))
 
 @hook.periodic(QUEUE_CHECK_SECONDS)
-def discord_receiver(bot):
+async def discord_receiver(bot):
     responses = consume()
     for response in responses:
-        handle_event(bot, response)
+        await handle_event(bot, response)
 
-def handle_event(bot, response):
+async def handle_event(bot, response):
     data = deserialize(response)
     if not data:
         log.warning("Unable to deserialize data! Aborting!")
@@ -299,6 +299,10 @@ def handle_event(bot, response):
     # handle command event
     elif event_type == "command":
         process_command(bot, data)
+
+    elif event_type == "factoid":
+        await process_factoid_request(bot, data)
+
     else:
         log.warning(f"Unable to handle event: {response}")
 
@@ -339,3 +343,15 @@ def process_command(bot, data):
             log.warning(f"Unable to send command to {CHANNEL}: {e}")   
     else:
         log.warning(f"Received unroutable command: {data.event.command}")
+
+async def process_factoid_request(bot, data):
+    bot.connections.get(IRC_CONNECTION).message(CHANNEL, format_message(data))
+    event = Event(
+        bot=bot, conn=bot.connections.get(IRC_CONNECTION), event_type=EventType.message, content_raw=data.event.content, content=data.event.content,
+        target="factoid_request", channel=CHANNEL, nick='janedoe', user="~janedoe", host="unaffiliated/janedoe", mask="janedoe!~janedoe@unaffiliated/janedoe", irc_raw="",
+        irc_prefix="janedoe!~janedoe@unaffiliated/janedoe", irc_command="PRIVMSG", irc_paramlist=[CHANNEL, data.event.content], irc_ctcp_text=None
+    )
+    await bot.process(event)
+        
+
+
