@@ -18,7 +18,11 @@ MQ_SSL = False
 SEND_QUEUE = "IRCToDiscord"
 RECV_QUEUE = "DiscordToIRC"
 IRC_CONNECTION = "freenode"
-CHANNEL = "#effprime-bot"
+CHANNEL_MAP = {
+    668165200901439521: "#effprime-bot",
+    674778646472556605: "#effprime-butt"
+}
+CHANNELS = list(CHANNEL_MAP.values())
 QUEUE_CHECK_SECONDS = 1
 QUEUE_SEND_SECONDS = 1
 STALE_PERIOD_SECONDS = 600
@@ -39,7 +43,7 @@ def get_permission(event):
         users = get_users(event.conn)
         user = users.get(event.nick)
         if user:
-            member = user.channels.get(CHANNEL) if user else None
+            member = user.channels.get(event.chan) if user else None
             if member:
                 modes = []
                 for entry in member.status:
@@ -203,7 +207,8 @@ def _format_chat_message(data):
 
 @hook.regex(re.compile(r'[\s\S]+'))
 def irc_message_relay(event, match):
-    if event.chan != CHANNEL:
+    if event.chan not in CHANNELS:
+        log.warning(f"Ignoring channel {event.chan} because not in {CHANNELS}")
         return
     send_buffer.append(serialize("message", event))
 
@@ -237,7 +242,7 @@ def append_factoids(conn, bodies):
     EventType.notice
 ])
 def irc_event_relay(event):
-    if event.chan != CHANNEL:
+    if event.chan not in CHANNELS:
         return
 
     lookup = {
@@ -257,11 +262,11 @@ def irc_quit_event_relay(event):
 @hook.command("discord", permissions=["op", "chanop"])
 def discord_command(text, nick, db, conn, mask, event):
     if not COMMANDS_ALLOWED:
-        return f"{nick}: relay cross-chat commands have been disabled on this bot ({CHANNEL})" 
+        return f"{nick}: relay cross-chat commands have been disabled on this bot" 
 
-    if event.chan != CHANNEL:
-        log.warning(f"Discord command issued outside of channel {CHANNEL}")
-        return f"{nick}: that command can only be used from the Discord relay channel ({CHANNEL})"
+    if event.chan not in CHANNELS:
+        log.warning("Discord command issued outside of channel")
+        return f"{nick}: that command can only be used from the Discord relay channels"
 
     args = text.split(" ")
     if len(args) > 0:
@@ -289,10 +294,18 @@ async def handle_event(bot, response):
     if event_type in ["message"]:
         message = format_message(data)
         if message:
+            channel = None
+            for channel_name in CHANNELS:
+                if channel_name == CHANNEL_MAP.get(data.channel.id):
+                    channel = channel_name
+                    break
+            if not channel:
+                log.warning("Unable to find channel to send message")
+                return
             try:
-                bot.connections.get(IRC_CONNECTION).message(CHANNEL, message)
+                bot.connections.get(IRC_CONNECTION).message(channel, message)
             except Exception as e:
-                log.warning(f"Unable to send message to {CHANNEL}: {e}")
+                log.warning(f"Unable to send message to {channel}: {e}")
         else:
             log.warning(f"Unable to format message for event: {response}")
 
@@ -315,43 +328,58 @@ def process_command(bot, data):
         log.warning(f"Blocking incoming {data.event.command} request due to permissions")
         return
 
+    channel = None
+    for channel_name in CHANNELS:
+        if channel_name == CHANNEL_MAP.get(data.channel.id):
+            channel = channel_name
+            break
+    if not channel:
+        log.warning("Unable to find channel to send message")
+        return
+
     bot.connections.get(IRC_CONNECTION).message(
-        CHANNEL,
+        channel,
         f"Executing IRC {data.event.command} command from {data.author.username} on target {data.event.content}"
     )
 
     action = ""
     if data.event.command == "kick":
-        action = f"KICK {CHANNEL} {data.event.content} :kicked by {data.author.username} from Discord"
+        action = f"KICK {channel} {data.event.content} :kicked by {data.author.username} from Discord"
 
     elif data.event.command in  ["ban", "unban"]:
         mode = "+" if data.event.command == "ban" else "-"
         if data.event.content.count(".") == 3:
             # very likely to be an IP
             # cant wait to see the edge case
-            action = f"MODE {CHANNEL} {mode}b *!*@*{data.event.content}"
+            action = f"MODE {channel} {mode}b *!*@*{data.event.content}"
         else:
-            action = f"MODE {CHANNEL} {mode}b {data.event.content}!*@*"
+            action = f"MODE {channel} {mode}b {data.event.content}!*@*"
 
     elif data.event.command == "unban":
-        action = f"MODE {CHANNEL} -b {data.event.content}!*@*"
+        action = f"MODE {channel} -b {data.event.content}!*@*"
 
     if action:
         try:
             bot.connections.get(IRC_CONNECTION).send(action)
         except Exception as e:
-            log.warning(f"Unable to send command to {CHANNEL}: {e}")   
+            log.warning(f"Unable to send command to {channel}: {e}")   
     else:
         log.warning(f"Received unroutable command: {data.event.command}")
 
 async def process_factoid_request(bot, data):
-    bot.connections.get(IRC_CONNECTION).message(CHANNEL, format_message(data))
+    channel = None
+    for channel_name in CHANNELS:
+        if channel_name == CHANNEL_MAP.get(data.channel.id):
+            channel = channel_name
+            break
+    if not channel:
+        log.warning("Unable to find channel to send message")
+        return
+
+    bot.connections.get(IRC_CONNECTION).message(channel, format_message(data))
     event = Event(
         bot=bot, conn=bot.connections.get(IRC_CONNECTION), event_type=EventType.message, content_raw=data.event.content, content=data.event.content,
-        target="factoid_request", channel=CHANNEL, nick='janedoe', user="~janedoe", host="unaffiliated/janedoe", mask="janedoe!~janedoe@unaffiliated/janedoe", irc_raw="",
-        irc_prefix="janedoe!~janedoe@unaffiliated/janedoe", irc_command="PRIVMSG", irc_paramlist=[CHANNEL, data.event.content], irc_ctcp_text=None
+        target="factoid_request", channel=channel, nick='janedoe', user="~janedoe", host="unaffiliated/janedoe", mask="janedoe!~janedoe@unaffiliated/janedoe", irc_raw="",
+        irc_prefix="janedoe!~janedoe@unaffiliated/janedoe", irc_command="PRIVMSG", irc_paramlist=[channel, data.event.content], irc_ctcp_text=None
     )
     await bot.process(event)
-        
-
-
