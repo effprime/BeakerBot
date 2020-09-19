@@ -6,6 +6,7 @@ import datetime
 import json
 import re
 import logging
+import uuid
 
 from plugins.core.chan_track import get_users
 
@@ -59,6 +60,7 @@ def serialize(type_, event):
     # event data
     data.event = Munch()
     data.event.type = type_
+    data.event.uuid = str(uuid.uuid4())
     data.event.time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
     data.event.content = getattr(event, "content", None) or getattr(event, "content_raw", None)
     data.event.command = getattr(event, "discord_command", None)
@@ -271,8 +273,8 @@ def discord_command(text, nick, db, conn, mask, event):
     args = text.split(" ")
     if len(args) > 0:
         command = args[0]
-        if command in ["kick", "ban", "unban"] and len(args) > 1:
-            target = args[1]
+        if len(args) > 1:
+            target = " ".join(args[1:])
             event.discord_command = command
             event.content = target
             send_buffer.append(serialize("command", event))
@@ -282,6 +284,11 @@ async def discord_receiver(bot):
     responses = consume()
     for response in responses:
         await handle_event(bot, response)
+
+def _get_channel(data):
+    for channel_name in CHANNELS:
+        if channel_name == CHANNEL_MAP.get(data.channel.id):
+            return channel_name
 
 async def handle_event(bot, response):
     data = deserialize(response)
@@ -294,11 +301,7 @@ async def handle_event(bot, response):
     if event_type in ["message"]:
         message = format_message(data)
         if message:
-            channel = None
-            for channel_name in CHANNELS:
-                if channel_name == CHANNEL_MAP.get(data.channel.id):
-                    channel = channel_name
-                    break
+            channel = self._get_channel(data)
             if not channel:
                 log.warning("Unable to find channel to send message")
                 return
@@ -328,11 +331,7 @@ def process_command(bot, data):
         log.warning(f"Blocking incoming {data.event.command} request due to permissions")
         return
 
-    channel = None
-    for channel_name in CHANNELS:
-        if channel_name == CHANNEL_MAP.get(data.channel.id):
-            channel = channel_name
-            break
+    channel = self._get_channel(data)
     if not channel:
         log.warning("Unable to find channel to send message")
         return
@@ -367,11 +366,7 @@ def process_command(bot, data):
         log.warning(f"Received unroutable command: {data.event.command}")
 
 async def process_factoid_request(bot, data):
-    channel = None
-    for channel_name in CHANNELS:
-        if channel_name == CHANNEL_MAP.get(data.channel.id):
-            channel = channel_name
-            break
+    channel = self._get_channel(data)
     if not channel:
         log.warning("Unable to find channel to send message")
         return
