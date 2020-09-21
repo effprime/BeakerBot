@@ -30,6 +30,7 @@ STALE_PERIOD_SECONDS = 600
 COMMANDS_ALLOWED = True
 RESPONSE_LIMIT = 3
 SEND_LIMIT = 3
+SEND_JOIN_PART_EVENTS = False
 
 IRC_BOLD = ""
 IRC_ITALICS = ""
@@ -238,7 +239,7 @@ def append_factoids(conn, bodies):
 
 @hook.event([
     EventType.join, 
-    EventType.part, 
+    EventType.part,
     EventType.kick, 
     EventType.other,
     EventType.notice
@@ -255,6 +256,10 @@ def irc_event_relay(event):
         EventType.other: "other",
         EventType.notice: "notice"
     }
+
+    if lookup[event.type] in ["join", "part"] and not SEND_JOIN_PART_EVENTS:
+        return
+
     send_buffer.append(serialize(lookup[event.type], event))
 
 @hook.irc_raw("QUIT")
