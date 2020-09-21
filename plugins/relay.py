@@ -301,7 +301,7 @@ async def handle_event(bot, response):
     if event_type in ["message"]:
         message = format_message(data)
         if message:
-            channel = self._get_channel(data)
+            channel = _get_channel(data)
             if not channel:
                 log.warning("Unable to find channel to send message")
                 return
@@ -327,11 +327,19 @@ def process_command(bot, data):
         log.warning(f"Blocking incoming {data.event.command} request due to disabled config")
         return
 
+    if data.event.command in ["kick", "ban", "unban"]:
+        _process_user_command(bot, data)
+    elif data.event.command == "whois":
+        _process_whois_command(bot, data)
+    else:
+        log.warning(f"Received unroutable command: {data.event.command}")
+
+def _process_user_command(bot, data):
     if not getattr(data.author.permissions, data.event.command) == True and not getattr(data.author.permissions, "admin"):
         log.warning(f"Blocking incoming {data.event.command} request due to permissions")
         return
 
-    channel = self._get_channel(data)
+    channel = _get_channel(data)
     if not channel:
         log.warning("Unable to find channel to send message")
         return
@@ -361,12 +369,43 @@ def process_command(bot, data):
         try:
             bot.connections.get(IRC_CONNECTION).send(action)
         except Exception as e:
-            log.warning(f"Unable to send command to {channel}: {e}")   
-    else:
-        log.warning(f"Received unroutable command: {data.event.command}")
+            log.warning(f"Unable to send command to {channel}: {e}")
+
+def _process_whois_command(bot, data):
+    connection = bot.connections.get(IRC_CONNECTION)
+    
+    # this seems to help
+    connection.cmd("WHOIS", data.event.content)
+
+    users = connection.memory.get("users", {})
+    user = users.getuser(data.event.content)
+
+    request = Munch()
+    request.author = data.author.id
+    request.event = data.event.id
+
+    payload = Munch()
+    payload.nick = user.mask.nick
+    payload.user = user.mask.user
+    payload.host = user.mask.host
+    payload.realname = user.realname
+    payload.server = user.server
+    payload.away = user.is_away
+    payload.away_message = user.away_message
+    payload.channels = list(user.channels.keys())
+
+    response = Munch()
+    response.request = request
+    response.type = "whois"
+    response.payload = payload
+
+    event = Event(bot=bot, conn=connection, channel=_get_channel(data))
+    event.content = response
+
+    send_buffer.append((serialize("response", event)))
 
 async def process_factoid_request(bot, data):
-    channel = self._get_channel(data)
+    channel = _get_channel(data)
     if not channel:
         log.warning("Unable to find channel to send message")
         return
