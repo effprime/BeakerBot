@@ -8,4 +8,4 @@ services:
     container_name: ${CONTAINER_NAME:-beakerbot}
     restart: always
     volumes:
-      - ${DB_DIR:-./db}:/db
+      - /db_volume:/db
