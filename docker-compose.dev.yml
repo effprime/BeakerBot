@@ -4,4 +4,4 @@ services:
 
   cloudbot:
     volumes:
-      - .:/cloudbot
+      - .:/beakerbot
