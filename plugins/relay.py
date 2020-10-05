@@ -264,6 +264,9 @@ def irc_event_relay(event):
 
 @hook.irc_raw("QUIT")
 def irc_quit_event_relay(event):
+    if not SEND_JOIN_PART_EVENTS:
+        return
+
     send_buffer.append(serialize("quit", event))
 
 @hook.command("discord", permissions=["op", "chanop"])
