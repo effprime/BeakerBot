@@ -206,7 +206,7 @@ def _get_permissions_label(permissions):
 def _format_chat_message(data):
     attachment_urls = ", ".join(data.event.attachments) if data.event.attachments else ""
     attachment_urls = f" {attachment_urls}" if attachment_urls else ""
-    return f"{IRC_BOLD}[D]{IRC_BOLD} <{_get_permissions_label(data.author.permissions)}{data.author.username}> {data.event.content} {attachment_urls}"
+    return f"{IRC_BOLD}[D]{IRC_BOLD} <{_get_permissions_label(data.author.permissions)}{data.author.nickname}> {data.event.content} {attachment_urls}"
 
 @hook.regex(re.compile(r'[\s\S]+'))
 def irc_message_relay(event, match):
