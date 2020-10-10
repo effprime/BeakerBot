@@ -34,6 +34,7 @@ SEND_JOIN_PART_EVENTS = False
 
 IRC_BOLD = ""
 IRC_ITALICS = ""
+IRC_NULL = ""
 
 log = logging.getLogger("relay_plugin")
 
@@ -203,10 +204,15 @@ def _get_permissions_label(permissions):
     else:
         return ""
 
+def mangle_nick(nick):
+    midpoint = len(nick)//2
+    return nick[0:midpoint] + IRC_NULL + nick[midpoint:] + IRC_NULL
+
 def _format_chat_message(data):
     attachment_urls = ", ".join(data.event.attachments) if data.event.attachments else ""
     attachment_urls = f" {attachment_urls}" if attachment_urls else ""
-    return f"{IRC_BOLD}[D]{IRC_BOLD} <{_get_permissions_label(data.author.permissions)}{data.author.nickname}> {data.event.content} {attachment_urls}"
+    mangled_nick = mangle_nick(data.author.nickname)
+    return f"{IRC_BOLD}[D]{IRC_BOLD} <{_get_permissions_label(data.author.permissions)}{mangled_nick}> {data.event.content} {attachment_urls}"
 
 @hook.regex(re.compile(r'[\s\S]+'))
 def irc_message_relay(event, match):
