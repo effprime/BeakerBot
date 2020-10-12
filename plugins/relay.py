@@ -193,13 +193,15 @@ def get_ack(channel):
         return body
 
 def format_message(data):
-    if data.event.type in ["message", "factoid"]:
+    if data.event.type == "message":
         return _format_chat_message(data)
+    if data.event.type == "factoid":
+        return _format_factoid_message(data)
 
 def _get_permissions_label(permissions):
     if permissions.admin:
         return "**"
-    elif permissions.ban or permissions.kick:
+    if permissions.ban or permissions.kick:
         return "*"
     else:
         return ""
@@ -214,12 +216,18 @@ def _format_chat_message(data):
     mangled_nick = mangle_nick(data.author.nickname)
     return f"{IRC_BOLD}[D]{IRC_BOLD} <{_get_permissions_label(data.author.permissions)}{mangled_nick}> {data.event.content} {attachment_urls}"
 
+def _format_factoid_message(data):
+    return f"{IRC_BOLD}[D]{IRC_BOLD} {data.event.content}"
+
 @hook.regex(re.compile(r'[\s\S]+'))
 def irc_message_relay(event, match):
     if event.chan not in CHANNELS:
         log.warning(f"Ignoring channel {event.chan} because not in {CHANNELS}")
         return
-    send_buffer.append(serialize("message", event))
+
+    content = match.group(0)
+    type_ = "factoid" if content.startswith("?") else "message"
+    send_buffer.append(serialize(type_, event))
 
 @hook.periodic(QUEUE_SEND_SECONDS)
 def irc_publish(bot):
@@ -227,21 +235,9 @@ def irc_publish(bot):
     bodies = [
         body for idx, body in enumerate(send_buffer) if idx+1 <= SEND_LIMIT
     ]
-    bodies = append_factoids(bot.connections.get(IRC_CONNECTION), bodies)
     if bodies:
         publish(bodies)
         send_buffer = send_buffer[len(bodies):]
-
-def append_factoids(conn, bodies):
-    if conn:
-        MAX_FACTOIDS = 5
-        memory = conn.memory.get("factoids")
-        if memory:
-            limit = MAX_FACTOIDS if MAX_FACTOIDS <= len(memory) else len(memory)
-            for i in range(0, limit):
-                bodies.append(serialize("factoid", memory[i]))
-            conn.memory["factoids"] = conn.memory["factoids"][limit:]
-    return bodies
 
 @hook.event([
     EventType.join, 
@@ -312,7 +308,7 @@ async def handle_event(bot, response):
 
     event_type = data.event.type
     # handle message event
-    if event_type in ["message"]:
+    if event_type in ["message", "factoid"]:
         message = format_message(data)
         if message:
             channel = _get_channel(data)
@@ -329,9 +325,6 @@ async def handle_event(bot, response):
     # handle command event
     elif event_type == "command":
         process_command(bot, data)
-
-    elif event_type == "factoid":
-        await process_factoid_request(bot, data)
 
     else:
         log.warning(f"Unable to handle event: {response}")
@@ -417,17 +410,3 @@ def _process_whois_command(bot, data):
     event.content = response
 
     send_buffer.append((serialize("response", event)))
-
-async def process_factoid_request(bot, data):
-    channel = _get_channel(data)
-    if not channel:
-        log.warning("Unable to find channel to send message")
-        return
-
-    bot.connections.get(IRC_CONNECTION).message(channel, format_message(data))
-    event = Event(
-        bot=bot, conn=bot.connections.get(IRC_CONNECTION), event_type=EventType.message, content_raw=data.event.content, content=data.event.content,
-        target="factoid_request", channel=channel, nick='janedoe', user="~janedoe", host="unaffiliated/janedoe", mask="janedoe!~janedoe@unaffiliated/janedoe", irc_raw="",
-        irc_prefix="janedoe!~janedoe@unaffiliated/janedoe", irc_command="PRIVMSG", irc_paramlist=[channel, data.event.content], irc_ctcp_text=None
-    )
-    await bot.process(event)
