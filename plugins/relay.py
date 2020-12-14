@@ -207,8 +207,10 @@ def _get_permissions_label(permissions):
         return ""
 
 def mangle_nick(nick):
-    midpoint = len(nick)//2
-    return nick[0:midpoint] + IRC_NULL + nick[midpoint:] + IRC_NULL
+    new_nick = ""
+    for char in nick:
+        new_nick += f"{char}{IRC_NULL}"
+    return new_nick
 
 def _format_chat_message(data):
     attachment_urls = ", ".join(data.event.attachments) if data.event.attachments else ""
